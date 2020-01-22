@@ -26,6 +26,8 @@ from utils import print_rank_0
 from utils import enable_adlr_autoresume
 from utils import check_adlr_autoresume_termination
 
+os.environ['CUDA_VISIBLE_DEVICES'] = '0, 1'
+
 def initialize_distributed(args):
     """Initialize torch.distributed."""
 
@@ -65,7 +67,7 @@ def get_train_val_test_data(args):
     # Data loader only on rank 0 of each model parallel group.
     if mpu.get_model_parallel_rank() == 0:
         data_config = configure_data()
-        data_config.set_defaults(data_set_type='BERT', transpose=False)
+        data_config.set_defaults(data_set_type='XLNET', transpose=False)
         (train_data, val_data, test_data), tokenizer = data_config.apply(args)
         before = tokenizer.num_tokens
         after = before
@@ -97,7 +99,6 @@ def get_train_val_test_data(args):
 
 def main():
     """Main training program."""
-    print("I am here_main")
     # Disable CuDNN.
     torch.backends.cudnn.enabled = False
     
@@ -118,4 +119,8 @@ def main():
     
     train_data, val_data, test_data, args.tokenizer_num_tokens, \
         args.tokenizer_num_type_tokens = get_train_val_test_data(args)
+    
+    
+if __name__ == "__main__":
+    main()
     

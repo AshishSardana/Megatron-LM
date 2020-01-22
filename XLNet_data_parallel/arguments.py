@@ -324,7 +324,8 @@ def add_data_args(parser):
                        choices=['CharacterLevelTokenizer',
                                 'SentencePieceTokenizer',
                                 'BertWordPieceTokenizer',
-                                'GPT2BPETokenizer'],
+                                'GPT2BPETokenizer',
+                                'XLNetWordPieceTokenizer'],
                        help='what type of tokenizer to use')
     group.add_argument("--cache-dir", default=None, type=str,
                        help="Where to store pre-trained BERT downloads")
@@ -396,8 +397,8 @@ def get_args():
     parser = add_model_config_args(parser)
     parser = add_fp16_config_args(parser)
     parser = add_training_args(parser)
-#     parser = add_evaluation_args(parser)
-#     parser = add_text_generate_args(parser)
+    parser = add_evaluation_args(parser)
+    parser = add_text_generate_args(parser)
     parser = add_data_args(parser)
     parser = xlnet_args(parser)
 
@@ -443,5 +444,5 @@ def get_args():
         args.fp32_tokentypes = False
         args.fp32_layernorm = False
     
-    print(args)
+#     print(args)
     return args

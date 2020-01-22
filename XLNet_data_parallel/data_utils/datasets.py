@@ -586,6 +586,60 @@ class GPT2Dataset(data.Dataset):
         if '!' in tok:
             return True
         return False
+    
+class XLNetDataset(data.Dataset):
+    """
+    Dataset class for XLNet Training. The code is referred from https://github.com/graykode/xlnet-Pytorch
+    """
+    def __init__(self, ds, seq_len=512, reuse_len = 256, mask_alpha = 6, mask_beta = 1, num_predict = 85, weighted=True, dataset_size=None, **kwargs):
+        self.ds = ds
+        self.ds_len = len(self.ds)
+#         print("ds_len: ", self.ds_len)
+        self.tokenizer = self.ds.GetTokenizer()
+        print("#####-----data_utils/datasets.py/XLNetDataset>__init__>ln(597...)-----#####")
+        print("tokenizer: ", self.tokenizer)
+        self.vocab_words = list(self.tokenizer.text_token_vocab.values())
+        self.ds.SetTokenizer(None)
+        #####
+        self.seq_len = seq_len
+        self.reuse_len = reuse_len
+        self.mask_alpha = mask_alpha
+        self.mask_beta = mask_beta
+        self.num_predict = num_predict
+        #####
+        # if max_preds_per_seq is None:
+        #     max_preds_per_seq = math.ceil(max_seq_len*mask_lm_prob /10)*10
+        # self.max_preds_per_seq = max_preds_per_seq
+        # self.short_seq_prob = short_seq_prob
+        self.dataset_size = dataset_size
+        if self.dataset_size is None:
+            self.dataset_size = self.ds_len * (self.ds_len-1)
+        # self.presplit_sentences = presplit_sentences
+        # if not self.presplit_sentences:
+        #     nltk.download('punkt', download_dir="./nltk")
+        self.weighted = weighted
+        self.get_weighting()
+        
+    def get_weighting(self):
+        if self.weighted:
+            if hasattr(self.ds, 'is_lazy') and self.ds.is_lazy:
+                lens = np.array(self.ds.lens)
+            else:
+                lens = np.array([len(d['text']) if isinstance(d, dict) else len(d) for d in self.ds])
+            self.total_len = np.sum(lens)
+
+            ###---workaound for ERROR: iteration over a 0-D array---###
+            ###---Not sure if it is correct-------------------------###
+            if lens.shape == ():
+                lens = lens.reshape(1)
+            ####----------------------------------------------------###
+
+            self.weighting = list(accumulate(lens))
+        else:
+            self.weighting = None
+        
+    def __len__(self):
+        return self.dataset_size
 
 class bert_sentencepair_dataset(data.Dataset):
     """

@@ -1,6 +1,6 @@
 #!/bin/bash
 
-GPUS_PER_NODE=8
+GPUS_PER_NODE=2
 # Change for multinode config
 MASTER_ADDR=localhost
 MASTER_PORT=6000
@@ -26,8 +26,8 @@ python -m torch.distributed.launch $DISTRIBUTED_ARGS \
        --resume-dataloader \
        --train-data wikipedia \
        --lazy-loader \
-       --tokenizer-type BertWordPieceTokenizer \
-       --tokenizer-model-type bert-large-uncased \
+       --tokenizer-type XLNetWordPieceTokenizer \
+       --tokenizer-model-type bert-base-uncased \
        --presplit-sentences \
        --cache-dir cache \
        --split 949,50,1 \

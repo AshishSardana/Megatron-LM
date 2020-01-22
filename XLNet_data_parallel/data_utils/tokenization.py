@@ -39,6 +39,9 @@ def make_tokenizer(tokenizer_type, corpus, model_path=None, vocab_size=None, mod
         return BertWordPieceTokenizer(model_type, **kwargs)
     elif tokenizer_class is GPT2BPETokenizer:
         return GPT2BPETokenizer(**kwargs)
+    #####-----select XLNetWordPieceTokenizer-----#####
+    elif tokenizer_class is XLNetWordPieceTokenizer:
+        return XLNetWordPieceTokenizer(model_type, **kwargs)
     text_tokenizer =  tokenizer_class(corpus=corpus, vocab_size=vocab_size, model_path=model_path, model_type=model_type,
                                       pad_token=pad_token, character_coverage=character_coverage)
     return Tokenizer(text_tokenizer, command_tokens, type_tokens)
@@ -794,6 +797,121 @@ class BertWordPieceTokenizer(Tokenizer):
         if isinstance(Tokens, Tokenization):
             Tokens = Tokens.tokenization
         return ' '.join(Tokens)
+    
+#####-----XLNetWordPieceTokenizer>same as BertWPT, with some minor changes-----#####
+
+class XLNetWordPieceTokenizer(Tokenizer):
+    """
+    Loads a pretrained WordPiece tokenizer from `cache_dir` for tokenization
+    in XLNet training. Default to bert-base-uncased tokenizer.
+    """
+    def __init__(self, tokenizer_model_type=None, cache_dir=None, **kwargs):
+        # default to bert-large-uncased tokenizer
+        if tokenizer_model_type not in PRETRAINED_VOCAB_ARCHIVE_MAP:
+            tokenizer_model_type = 'bert-base-uncased'
+        if torch.distributed.get_rank() == 0:
+            print('loading XLnetWordPieceTokenizer (', tokenizer_model_type, ') from cache_dir ', cache_dir)
+        do_lower_case = not ('-cased' in tokenizer_model_type or 'chinese' in tokenizer_model_type)
+        self.text_tokenizer = BertTokenizer.from_pretrained(tokenizer_model_type, do_lower_case=do_lower_case, cache_dir=cache_dir)
+        if torch.distributed.get_rank() == 0:
+            print('loaded', tokenizer_model_type)
+        # disable max len warnings by increasing max len
+        self.text_tokenizer.max_len = int(1e12)
+
+        # set command tokens from wordpiece tokenizer values
+        self.num_command_tokens = 5
+        self.num_tokens = len(self.text_tokenizer.vocab)
+        self.num_text_tokens = self.num_tokens-5
+        self.num_type_tokens = 2
+
+        self._command_tokens = [
+            CommandToken('pad', '[PAD]', self.text_tokenizer.vocab['[PAD]']),
+            CommandToken('ENC', '[CLS]', self.text_tokenizer.vocab['[CLS]']),
+            CommandToken('MASK', '[MASK]', self.text_tokenizer.vocab['[MASK]']),
+            CommandToken('unk', '[UNK]', self.text_tokenizer.vocab['[UNK]']),
+            CommandToken('sep', '[SEP]', self.text_tokenizer.vocab['[SEP]']),
+        ]
+        self.command_name_map = {tok.name: tok for tok in self._command_tokens}
+        self.command_token_map = {tok.token: tok for tok in self._command_tokens}
+        self.command_id_map = {tok.Id: tok for tok in self._command_tokens}
+
+        # set type tokens
+        self.type_tokens = [
+            TypeToken('str0', '<str0>', 0),
+            TypeToken('str1', '<str1>', 1),
+        ]
+        self.type_name_map = {tok.name: tok for tok in self.type_tokens}
+        self.type_token_map = {tok.token: tok for tok in self.type_tokens}
+        self.type_id_map = {tok.Id: tok for tok in self.type_tokens}
+
+        # parse tokens and vocabs from tokenizer
+
+        self._tokens = list(self.text_tokenizer.vocab.keys())
+        self._vocab = {k:v for k,v in self.text_tokenizer.vocab.items()}
+
+        self._text_tokens = list(self._tokens)
+        self._text_token_vocab = {k:v for k,v in self.text_tokenizer.vocab.items()}
+
+        self._command_token_tokens = list(self.command_token_map.keys())
+        self._command_token_vocab = {t:Id for Id,t in self.command_id_map.items()}
+
+        self._token_types = list(self.type_token_map.keys())
+        self._token_type_vocab = {t:Id for Id, t in self.type_id_map.items()}
+
+    def EncodeAsIds(self, text, process_fn=None):
+        """convert text to wordpiece Ids"""
+        processed_text = text
+        if process_fn is not None:
+            processed_text = process_fn(processed_text)
+        tokens = self.text_tokenizer.tokenize(processed_text)
+        Ids = self.text_tokenizer.convert_tokens_to_ids(tokens)
+        return Tokenization(Ids, processed_text, text)
+
+    def EncodeAsTokens(self, text, process_fn=None):
+        """convert wordpiece token to Id"""
+        processed_text = text
+        if process_fn is not None:
+            processed_text = process_fn(processed_text)
+        tokens = self.text_tokenizer.tokenize(processed_text)
+        return Tokenization(tokens, processed_text, text, asIds=False)
+
+    def IdToToken(self, Id, type_token=False):
+        """convert Id to sentencpiece token"""
+        if isinstance(Id, (TypeToken, CommandToken)):
+            return Id.token
+        if type_token:
+            return self.type_id_map[Id].token
+        return self.text_tokenizer.ids_to_tokens[Id]
+
+    def TokenToId(self, token, type_token=False):
+        """convert sentencpiece token to Id"""
+        if isinstance(token, (TypeToken, CommandToken)):
+            return token.Id
+        if type_token:
+            return self.type_token_map[token].Id
+        return self.text_tokenizer.vocab[token]
+
+    def DecodeIds(self, Ids, type_token=False):
+        """converts ids to wordpiece tokens and joins them as a text string"""
+        if type_token:
+            return ' '.join(Id.token if isinstance(Id, TypeToken) else self.type_id_map[Id].token for Id in Ids)
+        if isinstance(Ids, Tokenization):
+            Ids = Ids.tokenization
+        Tokens = []
+        for Id in Ids:
+            Tokens.append(self.text_tokenizer.ids_to_tokens[Id] if Id != -1 else '-1')
+        Tokens = self.text_tokenizer.convert_ids_to_tokens(Ids)
+        return ' '.join(Tokens)
+
+    def DecodeTokens(self, Tokens, type_token=False):
+        """converts wordpiece tokens to a text string"""
+        if type_token:
+            return ' '.join(t.token if isinstance(t, TypeToken) else t for t in Tokens)
+        if isinstance(Tokens, Tokenization):
+            Tokens = Tokens.tokenization
+        return ' '.join(Tokens)
+    
+#####---------------------------------------------------------------------------#####
 
 class GPT2BPETokenizer(Tokenizer):
     def __init__(self, cache_dir=None, **kwargs):

@@ -132,9 +132,14 @@ def make_loaders(args):
         eval_seq_length = eval_seq_length * world_size
     split = get_split(args)
     data_set_args = {
-        'path': args.data,
+        'path': args.train_data,
         'seq_length': seq_length,
+        #####-----Important for XLNet-----#####
         'reuse_len' : args.reuse_len,
+        'mask_alpha' : args.mask_alpha,
+        'mask_beta' : args.mask_beta,
+        'num_predict' : args.num_predict,
+        ######------------######
         'lazy': args.lazy_loader,
         'delim': args.delim,
         'text_key': args.text_key,
