@@ -14,7 +14,7 @@
 # limitations under the License.
 
 """Transformer."""
-
+import mpu
 import math
 
 import torch
@@ -210,11 +210,13 @@ class GPT2ParallelMLP(torch.nn.Module):
     def forward(self, hidden_states):
         # [b, s, 4hp]
         intermediate_parallel = self.dense_h_to_4h(hidden_states)
+        print("intermediate parallel: ", intermediate_parallel, intermediate_parallel.shape, mpu._MODEL_PARALLEL_GROUP)
         intermediate_parallel = gelu(intermediate_parallel)
 
         # [b, s, h]
         output = self.dense_4h_to_h(intermediate_parallel)
         output = self.dropout(output)
+        print("Output", output, output.shape, mpu.get_model_parallel_rank(),mpu.get_model_parallel_src_rank)
         return output
 
 

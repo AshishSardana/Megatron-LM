@@ -19,7 +19,7 @@ import math
 import torch
 
 from .samplers import DistributedBatchSampler
-from .datasets import json_dataset, csv_dataset, split_ds, ConcatDataset, SplitDataset, bert_sentencepair_dataset, GPT2Dataset
+from .datasets import json_dataset, csv_dataset, split_ds, ConcatDataset, SplitDataset, bert_sentencepair_dataset, GPT2Dataset, XLNetDataset
 from .lazy_loader import exists_lazy, make_lazy, lazy_array_loader
 from .tokenization import Tokenization, CommandToken, Tokenizer, CharacterLevelTokenizer, BertWordPieceTokenizer, GPT2BPETokenizer, make_tokenizer
 from . import corpora
@@ -60,8 +60,8 @@ def supported_corpus(corpus_name):
     """checks if corpus name is defined in `corpora.py`"""
     return corpus_name in corpora.NAMED_CORPORA
 
-def make_dataset(path, seq_length, text_key, label_key, lazy=False, process_fn=None, split=[1.],
-                delim=',', loose=False, binarize_sent=False, drop_unlabeled=False, tokenizer=None,
+def make_dataset(path, seq_length, text_key, label_key, lazy=False, process_fn=None,
+                 split=[1.], delim=',', loose=False, binarize_sent=False, drop_unlabeled=False, tokenizer=None,
                 tokenizer_type='CharacterLevelTokenizer', tokenizer_model_path=None, vocab_size=None,
                 model_type='bpe', pad_token=0, character_converage=1.0, non_binary_cols=None,
                  parallel_group=None, **kwargs):
@@ -81,8 +81,7 @@ def make_dataset(path, seq_length, text_key, label_key, lazy=False, process_fn=N
                 path_ = corpora.NAMED_CORPORA[path_].PATH
             if torch.distributed.get_rank() == 0 and not exists_lazy(path_, data_type='data'):
                 # create cached version of dataset for lazy loading if it doesn't exist
-                text = get_dataset(name if named_corpora else path_, text_key=text_key, label_key=label_key, binarize_sent=binarize_sent,
-                    delim=delim, drop_unlabeled=drop_unlabeled, loose_json=loose)
+                text = get_dataset(name if named_corpora else path_, text_key=text_key, label_key=label_key, binarize_sent=binarize_sent, delim=delim, drop_unlabeled=drop_unlabeled, loose_json=loose)
                 make_lazy(path_, text.X, data_type='data')
             # This should be a barrier but nccl barrier assumes
             # device_index=rank which is not the case for model
@@ -106,24 +105,46 @@ def make_dataset(path, seq_length, text_key, label_key, lazy=False, process_fn=N
         ds = datasets[0]
     else:
         ds = ConcatDataset(datasets)
+#     print("----debugger before tokenizer----")
+#     print(ds)
     # make tokenizer for dataset
     if tokenizer is None:
         tokenizer = make_tokenizer(tokenizer_type, ds, tokenizer_model_path, vocab_size, model_type, 
                                     pad_token, character_converage, **kwargs)
-
+#     print("#####-----data_utils/__init__.py/make_dataset()>ln(114...)-----######")
+#     print(tokenizer)
+#     print("#####----------######")
     ds_type = ''
     if 'ds_type' in kwargs:
         ds_type = kwargs['ds_type']
     ds.SetTokenizer(tokenizer)
     # Split dataset into train/val/test (and wrap bert dataset)
+#     print("----debugger before split----")
+#     print(ds)
     if should_split(split):
         ds = split_ds(ds, split)
+#         print("----debugger after split----")
+#         print(ds)
         if 'bert' in ds_type.lower():
             presplit_sentences = kwargs['presplit_sentences'] if 'presplit_sentences' in kwargs else False
             dstype = bert_sentencepair_dataset
             ds = [dstype(d, max_seq_len=seq_length, presplit_sentences=presplit_sentences)  if d is not None else None  for d in ds]
         elif ds_type.lower() == 'gpt2':
             ds = [GPT2Dataset(d, max_seq_len=seq_length) if d is not None else None for d in ds]
+        
+        elif 'xlnet' in ds_type.lower():
+            presplit_sentences = kwargs['presplit_sentences'] if 'presplit_sentences' in kwargs else False
+            print("initialize XLNetDataset")
+            reuse_len = kwargs.pop('reuse_len')
+            mask_alpha = kwargs.pop('mask_alpha')
+            mask_beta = kwargs.pop('mask_beta')
+            num_predict = kwargs.pop('num_predict')
+            bi_data = kwargs.pop('bi_data')
+            perm_size = kwargs.pop('perm_size')
+            ds = [XLNetDataset(d, seq_len = seq_length, reuse_len = reuse_len,
+                               mask_alpha = mask_alpha, mask_beta = mask_beta, num_predict = num_predict,
+                               bi_data = bi_data, perm_size = perm_size, presplit_sentences = presplit_sentences)
+                               if d is not None else None for d in ds]
     else:
         if 'bert' in ds_type.lower():
             presplit_sentences = kwargs['presplit_sentences'] if 'presplit_sentences' in kwargs else False

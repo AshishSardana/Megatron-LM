@@ -324,7 +324,8 @@ def add_data_args(parser):
                        choices=['CharacterLevelTokenizer',
                                 'SentencePieceTokenizer',
                                 'BertWordPieceTokenizer',
-                                'GPT2BPETokenizer'],
+                                'GPT2BPETokenizer',
+                                'XLNetWordPieceTokenizer'],
                        help='what type of tokenizer to use')
     group.add_argument("--cache-dir", default=None, type=str,
                        help="Where to store pre-trained BERT downloads")
@@ -341,22 +342,70 @@ def add_data_args(parser):
 
     return parser
 
+def xlnet_args(parser):
+    
+    group = parser.add_argument_group('xlnet', 'xlnet configurations')
+    
+#     group.add_argument('--data', type=str, default='data.txt')
+#     group.add_argument('--tokenizer', type=str, default='bert-base-uncased',
+#                         help='Path to the sentence piece model from pytorch-pretrained-BERT')
+#     group.add_argument('--seq_len', type=int, default=512, help="Sequence length.")
+    group.add_argument('--reuse_len', type=int, default=256,
+                        help="Number of token that can be reused as memory. "
+                             "Could be half of `seq_len`.")
+    group.add_argument('--perm_size', type=int,
+                        default=256,
+                        help="the length of longest permutation. Could be set to be reuse_len.")
+    group.add_argument('--bi_data', type=bool, default=False,
+                        help="whether to create bidirectional data")
+    group.add_argument('--mask_alpha', type=int,
+                        default=6, help="How many tokens to form a group.")
+    group.add_argument('--mask_beta', type=int,
+                        default=1, help="How many tokens to mask within each group.")
+    group.add_argument('--num_predict', type=int,
+                        default=85, help="Num of tokens to predict.")
+    group.add_argument('--mem_len', type=int,
+                        default=384, help="Number of steps to cache")
+    group.add_argument('--num_epoch', type=int,
+                        default=100, help="Number of epochs")
+    
+    #from add_data_args()
+#     group.add_argument('--model-parallel-size', type=int, default=1,
+#                        help='size of the model parallel.')
+#     group.add_argument('--shuffle', action='store_true',
+#                        help='Shuffle data. Shuffling is deterministic '
+#                        'based on seed and current epoch.')
+#     group.add_argument('--delim', default=',',
+#                        help='delimiter used to parse csv data files')
+#     group.add_argument('--split', default='1000,1,1',
+#                        help='comma-separated list of proportions for training,'
+#                        ' validation, and test split')
+#     group.add_argument('--lazy-loader', action='store_true',
+#                        help='whether to lazy read the data set')
+#     group.add_argument('--num-workers', type=int, default=2,
+#                        help="""Number of workers to use for dataloading""")
+#     group.add_argument("--cache-dir", default=None, type=str,
+#                        help="Where to store pre-trained BERT downloads")
+    
+    return parser
+
 
 def get_args():
     """Parse all the args."""
 
-    parser = argparse.ArgumentParser(description='PyTorch BERT Model')
+    parser = argparse.ArgumentParser(description='PyTorch XLNet Model')
     parser = add_model_config_args(parser)
     parser = add_fp16_config_args(parser)
     parser = add_training_args(parser)
     parser = add_evaluation_args(parser)
     parser = add_text_generate_args(parser)
     parser = add_data_args(parser)
+    parser = xlnet_args(parser)
 
     args = parser.parse_args()
 
-    if not args.train_data and not args.train_data_path:
-        print('WARNING: No training data specified')
+#     if not args.train_data and not args.train_data_path:
+#         print('WARNING: No training data specified')
 
     args.cuda = torch.cuda.is_available()
 
@@ -394,5 +443,6 @@ def get_args():
         args.fp32_embedding = False
         args.fp32_tokentypes = False
         args.fp32_layernorm = False
-
+    
+#     print(args)
     return args

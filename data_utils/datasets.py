@@ -14,6 +14,8 @@
 # limitations under the License.
 """dataset objects for jsons, csvs, and BERT datasets"""
 
+import torch
+
 import os
 import time
 from operator import itemgetter
@@ -480,13 +482,31 @@ class GPT2Dataset(data.Dataset):
 
     def init_weighting(self):
         if self.weighted:
+            print("----weighted is true----")
             if hasattr(self.ds, 'is_lazy') and self.ds.is_lazy:
+                print("----lazy is true----")
                 lens = np.array(self.ds.lens)
             else:
                 lens = np.array([len(d['text']) if isinstance(d, dict)
                                  else len(d) for d in self.ds])
             self.total_len = np.sum(lens)
+            
+#             ###---workaound for ERROR: iteration over a 0-D array---###
+#             ###---Not sure if it is correct-------------------------###
+#             if lens.shape == ():
+#                 lens = lens.reshape(1)
+#             ####----------------------------------------------------###
+            
+            print("----init_weighting_debugger-lens----")
+            print(type(lens))
+            print(lens)
+            print("----init_weighting_debugger-dataset----")
+            print(self.ds)
+            
             self.weighting = list(accumulate(lens))
+            
+            print("---acc_lens_debugger---")
+            print(self.weighting)
         else:
             self.weighting = None
 
@@ -568,7 +588,477 @@ class GPT2Dataset(data.Dataset):
         if '!' in tok:
             return True
         return False
+    
+class XLNetDataset(data.Dataset):
+    """
+    Dataset class for XLNet Training. The code is referred from https://github.com/graykode/xlnet-Pytorch
+    """
+    def __init__(self, ds, seq_len=512, reuse_len = 256, mask_alpha = 6, mask_beta = 1, num_predict = 85, weighted=True, dataset_size=None, bi_data = False, perm_size = 256, presplit_sentences = False, **kwargs):
+        self.ds = ds
+        print("ds: ", self.ds)
+#         i = 0
+#         dsi = iter(ds)
+#         while i < 1:
+#             print("ds: ", next(dsi))
+        self.ds_len = len(self.ds)
+#         print("ds_len: ", self.ds_len)
+        self.tokenizer = self.ds.GetTokenizer()
+        print("#####-----data_utils/datasets.py/XLNetDataset>__init__>ln(597...)-----#####")
+        print("tokenizer: ", self.tokenizer)
+        self.vocab_words = list(self.tokenizer.text_token_vocab.values())
+        self.ds.SetTokenizer(None)
+        #####
+        self.seq_len = seq_len
+        self.reuse_len = reuse_len
+        self.mask_alpha = mask_alpha
+        self.mask_beta = mask_beta
+        self.num_predict = num_predict
+        self.bi_data = bi_data
+        self.perm_size = perm_size
+        #####
+        # if max_preds_per_seq is None:
+        #     max_preds_per_seq = math.ceil(max_seq_len*mask_lm_prob /10)*10
+        # self.max_preds_per_seq = max_preds_per_seq
+        # self.short_seq_prob = short_seq_prob
+        self.dataset_size = dataset_size
+        if self.dataset_size is None:
+            self.dataset_size = self.ds_len * (self.ds_len-1)
+        self.presplit_sentences = presplit_sentences
+#         if not self.presplit_sentences:
+#             nltk.download('punkt', download_dir="./nltk")
+#         nltk.download('punkt', download_dir="./nltk")
+        self.weighted = weighted
+        self.get_weighting()
+        
+    def get_weighting(self):
+        if self.weighted:
+            if hasattr(self.ds, 'is_lazy') and self.ds.is_lazy:
+                lens = np.array(self.ds.lens)
+            else:
+                lens = np.array([len(d['text']) if isinstance(d, dict) else len(d) for d in self.ds])
+            self.total_len = np.sum(lens)
 
+            ###---workaound for ERROR: iteration over a 0-D array---###
+            ###---Not sure if it is correct-------------------------###
+            if lens.shape == ():
+                lens = lens.reshape(1)
+            ####----------------------------------------------------###
+
+            self.weighting = list(accumulate(lens))
+        else:
+            self.weighting = None
+        
+    def __len__(self):
+        return self.dataset_size
+    
+    def __getitem__(self, idx):
+#         features = []
+        
+        ds_batch = self.ds[idx]  ##<class 'str'>
+        
+        input_data, sent_ids, sent_id = [], [], True
+        print("ds_batch_type: ", type(ds_batch))
+#         lines = f.readlines()
+#         print("ds_batch {}: " .format(idx), ds_batch)
+#         print("idx: ", idx)
+        sentence_types, input_data, sent_ids, sent_id = self.sentence_split(ds_batch, input_data, sent_ids, sent_id)
+#         print("input_data: ", input_data)
+#         print("sent_split {}: " .format(idx) , sent_split)
+        features = self._create_data(input_data, sent_ids)
+    
+        for feature in features:
+            permutation = self.make_permute(feature, self.reuse_len, self.seq_len, self.perm_size, self.num_predict)
+            
+            return permutation
+#         print("idx: ", idx)
+#         return features
+    
+    def sentence_split(self, document, input_data, sent_ids, sent_id):
+        """split document into sentences"""
+        lines = document.split('\n')
+        print("lines type: ", type(lines))
+        print("len_lines: ", len(lines))
+        if self.presplit_sentences:
+            for line in lines:
+                cur_sent, sentence_types = self.sentence_tokenize(line, 0)
+                input_data.extend(cur_sent)
+                sent_ids.extend([sent_id] * len(cur_sent))
+                sent_id = not sent_id
+            return sentence_types, input_data, sent_ids, sent_id
+    
+    def sentence_tokenize(self, sent, sentence_num=0, beginning=False, ending=False):
+        """tokenize sentence and get token types"""
+        tokens = self.tokenizer.EncodeAsIds(sent).tokenization
+        str_type = 'str' + str(sentence_num)
+        token_types = [self.tokenizer.get_type(str_type).Id]*len(tokens)
+        return tokens, token_types
+    
+    def ids_to_tokens(self, Ids):
+        return self.tokenizer.ConvertIdsToTokens(Ids)
+    
+    def _split_a_and_b(self, data, sent_ids, begin_idx, tot_len, extend_target=False):
+        """Split two segments from `data` starting from the index `begin_idx`."""
+
+        data_len = data.shape[0]
+        if begin_idx + tot_len >= data_len:
+            print("[_split_a_and_b] returns None: "
+                    "begin_idx %d + tot_len %d >= data_len %d",
+                    begin_idx, tot_len, data_len)
+            return None
+
+        end_idx = begin_idx + 1
+        cut_points = []
+        while end_idx < data_len:
+            if sent_ids[end_idx] != sent_ids[end_idx - 1]:
+                if end_idx - begin_idx >= tot_len: break
+                cut_points.append(end_idx)
+            end_idx += 1
+
+        a_begin = begin_idx
+        if len(cut_points) == 0 or random.random() < 0.5:
+            # NotNext
+            label = 0
+            if len(cut_points) == 0:
+                a_end = end_idx
+            else:
+                a_end = random.choice(cut_points)
+
+            b_len = max(1, tot_len - (a_end - a_begin))
+            # (zihang): `data_len - 1` to account for extend_target
+            b_begin = random.randint(0, data_len - 1 - b_len)
+            b_end = b_begin + b_len
+            while b_begin > 0 and sent_ids[b_begin - 1] == sent_ids[b_begin]:
+                b_begin -= 1
+            # (zihang): `data_len - 1` to account for extend_target
+            while b_end < data_len - 1 and sent_ids[b_end - 1] == sent_ids[b_end]:
+                b_end += 1
+
+            new_begin = a_end
+        else:
+            # isNext
+            label = 1
+            a_end = random.choice(cut_points)
+            b_begin = a_end
+            b_end = end_idx
+
+            new_begin = b_end
+
+        while a_end - a_begin + b_end - b_begin > tot_len:
+            if a_end - a_begin > b_end - b_begin:
+                # delete the right side only for the LM objective
+                a_end -= 1
+            else:
+                b_end -= 1
+
+        ret = [data[a_begin: a_end], data[b_begin: b_end], label, new_begin]
+
+        if extend_target:
+            if a_end >= data_len or b_end >= data_len:
+                print("[_split_a_and_b] returns None: "
+                              "a_end %d or b_end %d >= data_len %d",
+                              a_end, b_end, data_len)
+                return None
+            a_target = data[a_begin + 1: a_end + 1]
+            b_target = data[b_begin: b_end + 1]
+            ret.extend([a_target, b_target])
+
+        return ret
+    
+    def _is_start_piece(self, piece):
+        special_pieces = set(list('!"#$%&\"()*+,-./:;?@[\\]^_`{|}~'))
+        piece = ''.join(piece)
+        if (piece.startswith("▁") or piece.startswith("<")
+            or piece in special_pieces):
+            return True
+        else:
+            return False
+    
+    def _sample_mask(self, sp, seg, mask_alpha, mask_beta,
+                 reverse=False, max_gram=5, goal_num_predict=None):
+        """Sample `goal_num_predict` tokens for partial prediction.
+        About `mask_beta` tokens are chosen in a context of `mask_alpha` tokens."""
+
+        seg_len = len(seg)
+        mask = np.array([False] * seg_len, dtype=np.bool)
+
+        num_predict = 0
+
+        ngrams = np.arange(1, max_gram + 1, dtype=np.int64)
+        pvals = 1. / np.arange(1, max_gram + 1)
+        pvals /= pvals.sum(keepdims=True)
+
+        if reverse:
+            seg = np.flip(seg, 0)
+
+        cur_len = 0
+        while cur_len < seg_len:
+            if goal_num_predict is not None and num_predict >= goal_num_predict: break
+
+            n = np.random.choice(ngrams, p=pvals)
+            if goal_num_predict is not None:
+                n = min(n, goal_num_predict - num_predict)
+            ctx_size = (n * mask_alpha) // mask_beta
+            l_ctx = np.random.choice(ctx_size)
+            r_ctx = ctx_size - l_ctx
+
+            # Find the start position of a complete token
+            beg = cur_len + l_ctx
+            while beg < seg_len and not self._is_start_piece(self.ids_to_tokens([seg[beg].item()])):
+#                 print("some_token: ", self.ids_to_tokens([seg[beg].item()]))
+                beg += 1
+            if beg >= seg_len:
+                break
+
+            # Find the end position of the n-gram (start pos of the n+1-th gram)
+            end = beg + 1
+            cnt_ngram = 1
+            while end < seg_len:
+                if self._is_start_piece(self.ids_to_tokens([seg[beg].item()])):
+                    cnt_ngram += 1
+                    if cnt_ngram > n:
+                        break
+                end += 1
+            if end >= seg_len:
+                break
+
+            # Update
+            mask[beg:end] = True
+            num_predict += end - beg
+
+            cur_len = end + r_ctx
+
+        while goal_num_predict is not None and num_predict < goal_num_predict:
+            i = np.random.randint(seg_len)
+            if not mask[i]:
+                mask[i] = True
+                num_predict += 1
+
+        if reverse:
+            mask = np.flip(mask, 0)
+
+        return mask
+    
+    def _create_data(self, input_data, sent_ids):
+        
+        features = []        
+        data = np.array([input_data], dtype=np.int64)
+        sent_ids = np.array([sent_ids], dtype=np.bool)
+        
+#         print("command_token: ", self.tokenizer.get_command('ENC').Id)
+
+        
+        assert self.reuse_len < self.seq_len - 3
+
+        data_len = data.shape[1]
+        sep_array = np.array([self.tokenizer.get_command('sep').Id], dtype=np.int64)
+        cls_array = np.array([self.tokenizer.get_command('ENC').Id], dtype=np.int64)
+        
+        i = 0
+        
+        while i + self.seq_len <= data_len:
+            inp = data[0, i: i + self.reuse_len]
+            tgt = data[0, i + 1: i + self.reuse_len + 1]
+            
+            results = self._split_a_and_b(data[0], # all line in one Text file.
+                                          sent_ids[0],
+                                          begin_idx = i + self.reuse_len,
+                                          tot_len = self.seq_len - self.reuse_len - 3,
+                                          extend_target=True)
+            
+            # unpack the results
+            (a_data, b_data, label, _, a_target, b_target) = tuple(results)
+
+            # sample ngram spans to predict
+            reverse = self.bi_data
+            
+            if self.num_predict is None:
+                num_predict_0 = num_predict_1 = None
+            else:
+                num_predict_1 = self.num_predict // 2
+                num_predict_0 = self.num_predict - num_predict_1
+            
+            mask_0 = self._sample_mask(self.tokenizer, inp, self.mask_alpha, self.mask_beta, reverse=reverse,
+                              goal_num_predict=num_predict_0)
+            mask_1 = self._sample_mask(self.tokenizer, np.concatenate([a_data, sep_array, b_data,
+                                                  sep_array, cls_array]),
+                              self.mask_alpha, self.mask_beta,
+                              reverse=reverse, goal_num_predict=num_predict_1)
+            # concatenate data
+            cat_data = np.concatenate([inp, a_data, sep_array, b_data,
+                                       sep_array, cls_array])
+            seg_id = ([0] * (self.reuse_len + a_data.shape[0]) + [0] +
+                      [1] * b_data.shape[0] + [1] + [2])
+            assert cat_data.shape[0] == self.seq_len
+            assert mask_0.shape[0] == self.seq_len // 2
+            assert mask_1.shape[0] == self.seq_len // 2
+
+            # the last two CLS's are not used, just for padding purposes
+            tgt = np.concatenate([tgt, a_target, b_target, cls_array, cls_array])
+            assert tgt.shape[0] == self.seq_len
+
+            is_masked = np.concatenate([mask_0, mask_1], 0)
+            if self.num_predict is not None:
+                assert np.sum(is_masked) == self.num_predict
+            print("i: ", i)
+            
+            feature = {
+                "input": cat_data,
+                "is_masked": is_masked,
+                "target": tgt,
+                "seg_id": seg_id,
+                "label": [label],
+                }
+            features.append(feature)
+
+            i += self.reuse_len
+        return features
+    
+    def _local_perm(self, inputs, targets, is_masked, perm_size, seq_len):
+        """
+        Sample a permutation of the factorization order, and create an
+        attention mask accordingly.
+
+        Args:
+        inputs: int64 Tensor in shape [seq_len], input ids.
+        targets: int64 Tensor in shape [seq_len], target ids.
+        is_masked: bool Tensor in shape [seq_len]. True means being selected
+          for partial prediction.
+        perm_size: the length of longest permutation. Could be set to be reuse_len.
+          Should not be larger than reuse_len or there will be data leaks.
+        seq_len: int, sequence length.
+        """
+
+        # Generate permutation indices
+        index = torch.arange(seq_len, dtype=torch.int64)
+
+        index = torch.reshape(index, [-1, perm_size]).t()
+        index = index[torch.randperm(index.shape[0])]
+        index = torch.reshape(index.t(), [-1])
+
+        # `perm_mask` and `target_mask`
+        # non-functional tokens
+        sep_id = self.tokenizer.get_command('sep').Id
+        cls_id = self.tokenizer.get_command('ENC').Id
+        non_func_tokens = ~(torch.eq(inputs, sep_id) | torch.eq(inputs, cls_id))
+        non_mask_tokens = (~is_masked) & non_func_tokens
+        masked_or_func_tokens = ~non_mask_tokens
+
+        # Set the permutation indices of non-masked (& non-funcional) tokens to the
+        # smallest index (-1):
+        # (1) they can be seen by all other positions
+        # (2) they cannot see masked positions, so there won"t be information leak
+        smallest_index = -torch.ones([seq_len], dtype=torch.int64)
+
+        # put -1 if `non_mask_tokens(real token not cls or sep)` not permutation index
+        rev_index = torch.where(non_mask_tokens, smallest_index, index)
+
+        # Create `target_mask`: non-funcional and maksed tokens
+        # 1: use mask as input and have loss
+        # 0: use token (or [SEP], [CLS]) as input and do not have loss
+        target_tokens = masked_or_func_tokens & non_func_tokens
+        target_mask = target_tokens.type(torch.float32)
+
+        # Create `perm_mask`
+        # `target_tokens` cannot see themselves
+        # put `rev_index` if real mask(not cls or sep) else `rev_index + 1`
+        self_rev_index = torch.where(target_tokens, rev_index, rev_index + 1)
+
+        # 1: cannot attend if i <= j and j is not non-masked (masked_or_func_tokens)
+        # 0: can attend if i > j or j is non-masked
+        perm_mask = (self_rev_index[:, None] <= rev_index[None, :]) &  masked_or_func_tokens
+        perm_mask = perm_mask.type(torch.float32)
+
+        # new target: [next token] for LM and [curr token] (self) for PLM
+        new_targets = torch.cat([inputs[0: 1], targets[: -1]], dim=0)
+
+        # construct inputs_k
+        inputs_k = inputs
+
+        # construct inputs_q
+        inputs_q = target_mask
+
+        return perm_mask, new_targets, target_mask, inputs_k, inputs_q
+    
+    def make_permute(self, feature, reuse_len, seq_len, perm_size, num_predict):
+        
+        inputs = torch.LongTensor(feature.pop("input"))
+        target = torch.LongTensor(feature.pop("target"))
+        is_masked = torch.ByteTensor(feature.pop("is_masked").astype(np.uint8))
+
+        non_reuse_len = seq_len - reuse_len
+        assert perm_size <= reuse_len and perm_size <= non_reuse_len
+
+        perm_mask_0, target_0, target_mask_0, input_k_0, input_q_0 = self._local_perm( 
+                                                                            inputs[:reuse_len], # inp
+                                                                            target[:reuse_len],
+                                                                            is_masked[:reuse_len],
+                                                                            perm_size,
+                                                                            reuse_len)
+
+        perm_mask_1, target_1, target_mask_1, input_k_1, input_q_1 = self._local_perm(
+                                                                            inputs[reuse_len:], # (senA, seq, senBm seq, cls)
+                                                                            target[reuse_len:],
+                                                                            is_masked[reuse_len:],
+                                                                            perm_size,
+                                                                            non_reuse_len)
+
+        perm_mask_0 = torch.cat([perm_mask_0, torch.ones([reuse_len, non_reuse_len])],
+                                dim=1)
+        perm_mask_1 = torch.cat([torch.zeros([non_reuse_len, reuse_len]), perm_mask_1],
+                                dim=1)
+
+        perm_mask = torch.cat([perm_mask_0, perm_mask_1], dim=0)
+        target = torch.cat([target_0, target_1], dim=0)
+        target_mask = torch.cat([target_mask_0, target_mask_1], dim=0)
+        input_k = torch.cat([input_k_0, input_k_1], dim=0)
+        input_q = torch.cat([input_q_0, input_q_1], dim=0)
+
+        if num_predict is not None:
+            indices = torch.arange(seq_len, dtype=torch.int64)
+            bool_target_mask = target_mask.byte()
+            indices = indices[bool_target_mask]
+
+            ##### extra padding due to CLS/SEP introduced after prepro
+            actual_num_predict = indices.shape[0]
+            pad_len = num_predict - actual_num_predict
+
+            assert seq_len >= actual_num_predict
+
+            ##### target_mapping
+            target_mapping = torch.eye(seq_len, dtype=torch.float32)[indices]
+            paddings = torch.zeros([pad_len, seq_len], dtype=target_mapping.dtype)
+            target_mapping = torch.cat([target_mapping, paddings], dim=0)
+            feature["target_mapping"] = torch.reshape(target_mapping,
+                                                    [num_predict, seq_len]).type(torch.LongTensor)
+            ##### target
+            target = target[bool_target_mask]
+            paddings = torch.zeros([pad_len], dtype=target.dtype)
+            target = torch.cat([target, paddings], dim=0)
+            feature["target"] = torch.reshape(target, [num_predict])
+
+            ##### target mask
+            target_mask = torch.cat(
+                [torch.ones([actual_num_predict], dtype=torch.float32),
+                 torch.zeros([pad_len], dtype=torch.float32)],
+                dim=0)
+            feature["target_mask"] = torch.reshape(target_mask, [num_predict]).type(torch.LongTensor)
+        else:
+            feature["target"] = torch.reshape(target, [seq_len])
+            feature["target_mask"] = torch.reshape(target_mask, [seq_len])
+
+        # reshape back to fixed shape
+#         feature["seg_id"] = torch.IntTensor(feature["seg_id"])
+#         feature["perm_mask"] = torch.reshape(perm_mask, [seq_len, seq_len])
+#         feature["input_k"] = torch.reshape(input_k, [seq_len])
+#         feature["input_q"] = torch.reshape(input_q, [seq_len])
+        
+        feature["seg_id"] = torch.LongTensor(feature["seg_id"])
+        feature["perm_mask"] = torch.reshape(perm_mask, [seq_len, seq_len]).type(torch.LongTensor)
+        feature["input_k"] = torch.reshape(input_k, [seq_len])
+        feature["input_q"] = torch.reshape(input_q, [seq_len]).type(torch.LongTensor)
+
+        return feature
+    
 class bert_sentencepair_dataset(data.Dataset):
     """
     Dataset containing sentencepairs for BERT training. Each index corresponds to a randomly generated sentence pair.
@@ -609,6 +1099,13 @@ class bert_sentencepair_dataset(data.Dataset):
             else:
                 lens = np.array([len(d['text']) if isinstance(d, dict) else len(d) for d in self.ds])
             self.total_len = np.sum(lens)
+            
+            ###---workaound for ERROR: iteration over a 0-D array---###
+            ###---Not sure if it is correct-------------------------###
+            if lens.shape == ():
+                lens = lens.reshape(1)
+            ####----------------------------------------------------###
+            
             self.weighting = list(accumulate(lens))
         else:
             self.weighting = None

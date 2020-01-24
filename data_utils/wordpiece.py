@@ -95,28 +95,36 @@ class BertTokenizer(object):
                 "Can't find a vocabulary file at path '{}'. To load the vocabulary from a Google pretrained "
                 "model use `tokenizer = BertTokenizer.from_pretrained(PRETRAINED_MODEL_NAME)`".format(vocab_file))
         self.vocab = load_vocab(vocab_file)
+        print("---data_utils/wordpiece.py/BertTokenizer/__init__.py---")
+#         print(self.vocab)
+#         print(self.vocab.keys())
         self.ids_to_tokens = collections.OrderedDict(
             [(ids, tok) for tok, ids in self.vocab.items()])
+#         print(self.ids_to_tokens)
+        print("------")
         self.do_basic_tokenize = do_basic_tokenize
         if do_basic_tokenize:
-          self.basic_tokenizer = BasicTokenizer(do_lower_case=do_lower_case,
+            self.basic_tokenizer = BasicTokenizer(do_lower_case=do_lower_case,
                                                 never_split=never_split)
         self.wordpiece_tokenizer = WordpieceTokenizer(vocab=self.vocab)
         self.max_len = max_len if max_len is not None else int(1e12)
 
     def tokenize(self, text):
         if self.do_basic_tokenize:
-          split_tokens = []
-          for token in self.basic_tokenizer.tokenize(text):
-              for sub_token in self.wordpiece_tokenizer.tokenize(token):
-                  split_tokens.append(sub_token)
+            split_tokens = []
+            for token in self.basic_tokenizer.tokenize(text):
+                for sub_token in self.wordpiece_tokenizer.tokenize(token):
+                    split_tokens.append(sub_token)
         else:
-          split_tokens = self.wordpiece_tokenizer.tokenize(text)
+            split_tokens = self.wordpiece_tokenizer.tokenize(text)
         return split_tokens
 
     def convert_tokens_to_ids(self, tokens):
         """Converts a sequence of tokens into ids using the vocab."""
         ids = []
+#         print("-----data_utils/wordpiece.py/BertTokenizer/convert_tokens_to_ids-----")
+#         print(tokens)
+#         print("--------------------------------------")
         for token in tokens:
             ids.append(self.vocab[token])
         if len(ids) > self.max_len:

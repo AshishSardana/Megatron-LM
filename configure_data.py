@@ -134,6 +134,14 @@ def make_loaders(args):
     data_set_args = {
         'path': args.train_data,
         'seq_length': seq_length,
+        #####-----Important for XLNet-----#####
+        'reuse_len' : args.reuse_len,
+        'mask_alpha' : args.mask_alpha,
+        'mask_beta' : args.mask_beta,
+        'num_predict' : args.num_predict,
+        'bi_data':args.bi_data,
+        'perm_size' : args.perm_size,
+        ######------------######
         'lazy': args.lazy_loader,
         'delim': args.delim,
         'text_key': args.text_key,
@@ -239,7 +247,7 @@ def configure_data():
         'lazy': False,
         'transpose': False,
         'data_set_type': 'supervised',
-        'seq_length': 256,
+        'seq_length': 512,
         'eval_seq_length': 256,
         'samples_per_shard': 100
     }

@@ -57,15 +57,17 @@ class GPT2Model(torch.nn.Module):
         self.parallel_output = parallel_output
 
         init_method = init_method_normal(std=0.02)
-
+        print("----Debugger model/gpt2modeling----")
+        print("init_method", init_method)
         # Word embeddings (parallel).
         self.word_embeddings = mpu.VocabParallelEmbedding(
             vocab_size, hidden_size, init_method=init_method)
-
+        print("word_embeddings", self.word_embeddings)
         # Position embedding (serial).
         self.position_embeddings = torch.nn.Embedding(max_sequence_length,
                                                       hidden_size)
-
+        print("position_embeddings", self.position_embeddings)
+        print("------------")
         # Token type embedding.
         # Add this as an optional field that can be added through
         # method call so we can load a pretrain model without

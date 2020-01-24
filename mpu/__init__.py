@@ -50,3 +50,5 @@ from .transformer import BertParallelSelfAttention
 from .transformer import BertParallelTransformerLayer
 from .transformer import GPT2ParallelTransformer
 from .transformer import LayerNorm
+
+from .initialize import _MODEL_PARALLEL_GROUP, _DATA_PARALLEL_GROUP
